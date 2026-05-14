@@ -1,18 +1,85 @@
 # AndroidElderly
 
-一个基于 Flutter 的 Android 应用，用来监听网络状态：
+一个基于 Flutter + Android 原生前台服务的网络守护 App，面向需要持续提醒网络异常的 Android 设备。
 
-- 当 WiFi 和移动数据都不可用时，立即弹出提醒。
-- 提供设置页，保存一个接收通知的邮箱地址。
-- 当网络恢复后，若已配置邮件 webhook，会自动把断网提醒发送到该邮箱。
+## 功能
 
-## 为什么不是“断网瞬间就把邮件发出去”
+- 后台前台服务持续监听 WiFi 和移动网络状态。
+- WiFi 或移动网络任意一个不可用时，触发系统级提醒。
+- 如果网络持续不可用，每小时重复提醒一次。
+- 每次手机解锁时再次检查网络状态，若仍有网络不可用则提醒。
+- 可设置本机名称，邮件标题和正文会带上设备名称，方便区分是哪台设备异常。
+- 可设置接收邮箱和 SMTP 邮件服务器，网络异常时由 Android 原生守护服务发送邮件。
+- 可设置接收短信号码，网络异常时由 Android 原生守护服务发送短信。
+- 首页显示邮件发送日志，记录成功、失败和配置不完整等情况。
+- 支持开机后自动启动守护服务。
+- 已替换默认 Flutter 图标，使用 Material 风格网络守护图标。
 
-当用户手动关闭 WiFi 和移动数据后，设备本身已经没有网络，所以无法在“完全离线”的同一时刻向外部邮件服务发送请求。这个项目采用的做法是：
+## 当前提醒规则
 
-1. 断网时立刻弹出本地提醒。
-2. 同时把“待发送邮件通知”记录在 App 内。
-3. 等网络恢复后，再自动把这条提醒发出去。
+当前规则是：**WiFi 和移动网络只要任意一个不可用，就会触发提醒**。
+
+这意味着：
+
+- WiFi 关闭，移动网络仍可用：会提醒，并尝试发送邮件和短信。
+- 移动网络关闭，WiFi 仍可用：会提醒，并尝试发送邮件和短信。
+- WiFi 和移动网络都关闭：会提醒；短信仍可尝试发送，邮件会因为没有网络而失败并写入日志。
+
+## 邮件发送
+
+邮件发送已经放在 Android 原生 `NetworkGuardService` 守护服务里，不依赖 Flutter 页面是否打开。因此 App 被划走后，只要前台守护服务仍在运行，仍会继续监听网络并尝试发送邮件。
+
+设置页需要填写：
+
+- 本机名称
+- 接收提醒的电子邮件地址
+- SMTP 服务器
+- SMTP 端口
+- 邮箱账号
+- 邮箱密码或授权码
+- 发件人邮箱
+- 连接安全方式
+
+当前原生 SMTP 支持：
+
+- SSL/TLS，常用端口 `465`
+- 不加密 SMTP，常用端口 `25`
+
+暂未实现 `STARTTLS 587`。如果使用 Gmail、QQ 邮箱、163 邮箱等服务，多数情况下需要使用邮箱服务商生成的 SMTP 授权码，而不是登录密码。
+
+## 短信发送
+
+短信发送也在 Android 原生 `NetworkGuardService` 守护服务里执行。
+
+需要：
+
+- 在设置页填写接收短信号码。
+- 授予 App `SEND_SMS` 权限。
+- 设备支持短信能力，并且运营商/SIM 卡允许发送短信。
+
+短信可能产生运营商费用。部分系统或厂商 ROM 可能会限制后台短信发送，需要手动允许短信权限或后台权限。
+
+## 权限
+
+App 使用到的主要 Android 权限包括：
+
+- `INTERNET`
+- `ACCESS_NETWORK_STATE`
+- `ACCESS_WIFI_STATE`
+- `FOREGROUND_SERVICE`
+- `FOREGROUND_SERVICE_SPECIAL_USE`
+- `POST_NOTIFICATIONS`
+- `RECEIVE_BOOT_COMPLETED`
+- `SEND_SMS`
+- `USE_FULL_SCREEN_INTENT`
+
+## 实现边界
+
+- 普通第三方 Android App 不能稳定、强制阻止用户关闭 WiFi 或移动数据。
+- 普通第三方 Android App 也不能在所有 Android 版本上可靠读取“用户是否手动关闭移动数据开关”的私有状态。
+- 当前实现基于 Android `ConnectivityManager` 的网络能力变化来判断 WiFi 和移动网络是否可用。
+- 如果两个网络都已关闭，设备没有外网连接，邮件无法真正发出；这种情况下会记录失败日志。
+- 要实现强制禁止关闭网络，需要企业设备管理能力，例如 Device Owner / MDM 场景。
 
 ## 运行
 
@@ -21,26 +88,39 @@ flutter pub get
 flutter run
 ```
 
-## 可选：接入你自己的邮件发送服务
+## 打包 APK
 
-项目没有内置第三方 SMTP 账号，也没有后端服务；如果你希望真正自动发邮件，可以在运行时传入一个 webhook 地址：
+Debug APK：
 
 ```bash
-flutter run --dart-define=EMAIL_WEBHOOK_URL=https://your-server.example/send-email
+flutter build apk --debug
 ```
 
-App 会向这个地址发送一个 JSON POST：
+Release APK：
 
-```json
-{
-  "to": "name@example.com",
-  "subject": "Android 网络关闭提醒",
-  "text": "设备检测到 WiFi 和移动数据都不可用。断网时间：2026-05-12 10:00:00.000"
-}
+```bash
+flutter build apk --release
 ```
 
-## 当前实现边界
+常见输出路径：
 
-- 监听逻辑基于 Android 网络能力变化，适合检测“WiFi 和蜂窝网络当前都不可用”。
-- 这不等同于系统级精确识别“用户手动关闭了移动数据开关”，因为普通第三方 App 无法稳定读取所有 Android 版本上的该私有状态。
-- 当前监听在 App 运行期间生效；如果你后续需要常驻后台监听，可以继续扩展为前台服务。
+```text
+build/app/outputs/flutter-apk/app-debug.apk
+build/app/outputs/flutter-apk/app-release.apk
+```
+
+## 日志排查
+
+查看 Android 崩溃日志：
+
+```bash
+adb shell dumpsys dropbox --print data_app_crash
+```
+
+实时查看关键错误日志：
+
+```bash
+adb logcat -v time AndroidRuntime:E flutter:E DartVM:E '*:S'
+```
+
+邮件发送成功或失败会写入 App 首页的“邮件发送日志”。
